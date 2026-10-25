@@ -1,0 +1,268 @@
+<!doctype html>
+<html lang="id">
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width,initial-scale=1" />
+        <title>Tugas B — Versi Tanpa Pattern</title>
+        <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap-utilities.min.css" rel="stylesheet">
+        <link rel="stylesheet" href="../assets/style.css" />
+    </head>
+    <body
+        data-base="../assets/py/case_b/"
+        data-files="input_handler.py"
+        data-version="B"
+    >
+        <main class="wrap">
+            <div class="banner p-3 mb-3" role="status">
+                <span class="task-label d-block mb-1">INI ADALAH TUGAS B</span>
+                <span class="text-white-75">Versi Tanpa Pattern (if/else langsung)</span>
+            </div>
+            <h1 class="h4 mb-3">Tugas B: Input Handling Tanpa Pattern</h1>
+            <p class="mb-3">
+                Tambahkan kontrol <b>W, A, S, D</b> (atas, kiri, bawah, kanan)
+                pada <code>input_handler.py</code> tanpa menghilangkan tombol
+                panah. Klik <b>Jalankan</b>, lalu klik area game dan coba
+                gerakkan pemain.
+            </p>
+            <p class="hint mb-4">
+                <a
+                    href="https://www.pygame.org/docs/ref/key.html"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    class="text-decoration-none"
+                    >Referensi tombol Pygame (K_UP, K_w, dan lainnya) ↗</a
+                >
+            </p>
+            <div class="cols">
+                <div class="d-flex flex-column">
+                    <div id="tree" class="mb-2 d-flex flex-wrap gap-1"></div>
+                    <textarea id="code" spellcheck="false" class="flex-grow-1 mb-2" style="min-height: 340px;"></textarea>
+                    <div class="row d-flex gap-2 flex-wrap">
+                        <button id="run" disabled class="btn btn-success flex-grow-1">Jalankan</button>
+                        <button id="stop" disabled class="btn btn-danger flex-grow-1">Berhenti</button>
+                        <button id="reset" class="btn btn-secondary flex-grow-1">Reset</button>
+                    </div>
+                </div>
+                <div class="d-flex flex-column align-items-center">
+                    <canvas
+                        id="canvas"
+                        width="520"
+                        height="260"
+                        tabindex="0"
+                        class="mb-2 w-100"
+                        style="max-width: 520px;"
+                    ></canvas>
+                    <pre id="status" class="w-100 text-start small">Memuat Python…</pre>
+                </div>
+            </div>
+        </main>
+        <script src="https://cdn.jsdelivr.net/pyodide/v0.29.0/full/pyodide.js"></script>
+        <script>
+            const $ = (id) => document.getElementById(id);
+            const base = document.body.dataset.base,
+              files = document.body.dataset.files.split(",");
+            const EDITABLE = "input_handler.py",
+              HOME = "/home/pyodide/";
+            const pressed = new Set(),
+              ARROWS = {
+                ArrowUp: "up",
+                ArrowDown: "down",
+                ArrowLeft: "left",
+                ArrowRight: "right",
+              };
+            const keyName = (e) => ARROWS[e.key] || e.key.toLowerCase();
+
+            let isRunning = false;
+
+            // Hentikan propagasi event saat di textarea agar SDL/Game tidak mencurinya,
+            // tetapi biarkan browser tetap memasukkan teks ke textarea secara normal.
+            window.addEventListener("keydown", (e) => {
+              if (e.target.tagName === "TEXTAREA") {
+                e.stopPropagation();
+                return;
+              }
+
+              pressed.add(keyName(e));
+              if (ARROWS[e.key] && document.activeElement === $("canvas")) {
+                e.preventDefault();
+              }
+            });
+
+            window.addEventListener("keyup", (e) => {
+              if (e.target.tagName === "TEXTAREA") {
+                e.stopPropagation();
+                return;
+              }
+              pressed.delete(keyName(e));
+            });
+
+            window.addEventListener("blur", () => pressed.clear());
+
+            const orig = {},
+              edits = {};
+            let current = null,
+              py;
+            const status = (t) => ($("status").textContent = t);
+            const fetchText = async (u) => {
+              const r = await fetch(u);
+              if (!r.ok) throw new Error("Gagal memuat " + u);
+              return r.text();
+            };
+            function show(f) {
+              if (current === EDITABLE && !isRunning) edits[EDITABLE] = $("code").value;
+              current = f;
+              $("code").value = edits[f];
+              $("code").readOnly = f !== EDITABLE;
+              $("code").disabled = isRunning; // Ikuti status berjalan (greyed out jika game jalan)
+              $("tree").innerHTML = files
+                .map(
+                  (n) =>
+                    `<button data-f="${n}" class="${n === f ? "on" : ""}">${n}${n === EDITABLE ? " (edit)" : " (baca saja)"}</button>`,
+                )
+                .join("");
+            }
+            $("tree").addEventListener("click", (e) => {
+              const f = e.target.dataset.f;
+              if (f) show(f);
+            });
+            $("reset").onclick = () => {
+              if (isRunning) return;
+              edits[EDITABLE] = orig[EDITABLE];
+              if (current === EDITABLE) $("code").value = orig[EDITABLE];
+              status("Kode dikembalikan ke awal.");
+            };
+
+            // Tombol Berhenti (Stop / Close Game)
+            $("stop").onclick = async () => {
+              try {
+                if (py) {
+                  await py.runPythonAsync("import game; game.stop()");
+                  // Give the game loop time to exit cleanly (finally block calls pygame.quit())
+                  await new Promise((r) => setTimeout(r, 150));
+                }
+              } catch (err) {
+                // Abaikan jika sudah berhenti
+              }
+
+              // Bersihkan/tutup tampilan canvas game
+              const canvas = $("canvas");
+              const ctx = canvas.getContext("2d");
+              
+              // Ensure canvas maintains its explicit size (prevents squishing)
+              canvas.width = 520;
+              canvas.height = 260;
+              canvas.style.width = "520px";
+              canvas.style.height = "260px";
+              
+              ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+              isRunning = false;
+              $("code").disabled = false; // Aktifkan kembali textarea
+              $("run").disabled = false;
+              $("stop").disabled = true;
+              pressed.clear();
+              
+              // Restore focus to textarea so user can type immediately
+              $("code").focus();
+              
+              // Restore document title if pygame changed it
+              if (document.title === "pygame window") {
+                document.title = originalTitle;
+              }
+              
+              // Keep this status visible (don't let anything overwrite it)
+              const stopMsg = "Game dihentikan dan ditutup.";
+              status(stopMsg);
+              // Prevent checker callback from overwriting (it runs after game loop ends)
+              window._gameStopped = true;
+            };
+
+            async function run() {
+              // Reset stop flag
+              window._gameStopped = false;
+              
+              if (current === EDITABLE) edits[EDITABLE] = $("code").value;
+              status("Menjalankan...");
+              
+              isRunning = true;
+              $("code").disabled = true; // Matikan dan buat abu-abu (greyed out) saat game jalan
+              $("run").disabled = true;
+              $("stop").disabled = false;
+
+              try {
+                // Stop any previous game instance
+                await py.runPythonAsync("import game; game.stop()");
+                await new Promise((r) => setTimeout(r, 120));
+                for (const f of files) py.FS.writeFile(HOME + f, edits[f]);
+                const res = JSON.parse(
+                  await py.runPythonAsync(`
+import sys, importlib, asyncio, game, checker
+importlib.invalidate_caches()
+for m in ('input_handler'): sys.modules.pop(m, None)
+import input_handler
+asyncio.ensure_future(game.run(input_handler, get_keys))
+checker.check(input_handler)`),
+                );
+                // If user manually stopped, don't overwrite the status
+                if (window._gameStopped) return;
+                const line = Object.entries(res)
+                  .map(([k, v]) => k.toUpperCase() + (v ? " ✓" : " ✗"))
+                  .join("    ");
+                const allPassed = Object.values(res).every(Boolean);
+                const version = document.body.dataset.version;
+                const successMsg = version === "A"
+                  ? '"Selamat sudah beres mengerjakan tugas A"'
+                  : version === "B"
+                    ? '"Terimakasih sudah mengerjakan tugas B"'
+                    : "Selesai: W, A, S, D berfungsi dan tombol panah tetap jalan. Silakan kembali ke Google Form.";
+                status(
+                  line +
+                    "\n\n" +
+                    (allPassed
+                      ? successMsg
+                      : "Belum lengkap. Klik area game lalu coba tombolnya, ubah kode, dan jalankan lagi."),
+                );
+              } catch (err) {
+                if (window._gameStopped) return;
+                status(
+                  "Ada error pada kode:\n" +
+                    String(err.message).trim().split("\n").slice(-4).join("\n"),
+                );
+                isRunning = false;
+                $("code").disabled = false;
+                $("run").disabled = false;
+                $("stop").disabled = true;
+              }
+            }
+
+            (async () => {
+              try {
+                const originalTitle = document.title;
+                for (const f of files) orig[f] = edits[f] = await fetchText(base + f);
+                show(EDITABLE);
+                py = await loadPyodide();
+                await py.loadPackage("pygame-ce");
+                py.canvas.setCanvas2D($("canvas"));
+                for (const f of ["game.py", "checker.py"])
+                  py.FS.writeFile(HOME + f, await fetchText("../assets/py/" + f));
+                py.runPython("import sys; sys.path.insert(0, '/home/pyodide')");
+                py.globals.set("get_keys", () => Array.from(pressed));
+                $("run").onclick = run;
+                $("run").disabled = false;
+                $("stop").disabled = true;
+                status("Siap. Klik Jalankan.");
+
+                // Restore document title when pygame changes it
+                const titleObserver = new MutationObserver(() => {
+                  if (document.title === "pygame window" && !isRunning) {
+                    document.title = originalTitle;
+                  }
+                });
+                titleObserver.observe(document.querySelector("title"), { childList: true });
+              } catch (err) {
+                status("Gagal memuat: " + err.message);
+              }
+            })();
+        </script>
+    </body>
+</html>
