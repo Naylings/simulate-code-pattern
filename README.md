@@ -1,3 +1,4 @@
+# simulate-code-pattern
 # Input Pattern Study
 
 Situs statis untuk membandingkan implementasi input game menggunakan Command Pattern dan `if/else` langsung.
