@@ -178,32 +178,41 @@
             };
 
             async function run() {
-              // Reset stop flag
               window._gameStopped = false;
               
               if (current === EDITABLE) edits[EDITABLE] = $("code").value;
               status("Menjalankan...");
               
               isRunning = true;
-              $("code").disabled = true; // Matikan dan buat abu-abu (greyed out) saat game jalan
+              $("code").disabled = true;
               $("run").disabled = true;
               $("stop").disabled = false;
 
               try {
-                // Stop any previous game instance
-                await py.runPythonAsync("import game; game.stop()");
-                await new Promise((r) => setTimeout(r, 120));
+                // Write edited files to filesystem first
                 for (const f of files) py.FS.writeFile(HOME + f, edits[f]);
-                const res = JSON.parse(
-                  await py.runPythonAsync(`
+                // Stop previous game, reload modules, start new game, run checker
+                const res = JSON.parse(await py.runPythonAsync(`
 import sys, importlib, asyncio, game, checker
+# Stop previous game loop if running
+if hasattr(game, '_game_task') and game._game_task and not game._game_task.done():
+    game.stop()
+    try:
+        await asyncio.wait_for(game._game_task, timeout=0.5)
+    except asyncio.TimeoutError:
+        pass
+# Reload all modules fresh
 importlib.invalidate_caches()
-for m in ('input_handler', 'commands'): sys.modules.pop(m, None)
+for m in ('input_handler', 'commands', 'game', 'checker'):
+    sys.modules.pop(m, None)
+import game
+import checker
 import input_handler
-asyncio.ensure_future(game.run(input_handler, get_keys))
-checker.check(input_handler)`),
-                );
-                // If user manually stopped, don't overwrite the status
+# Start new game loop and store task reference
+game._game_task = asyncio.ensure_future(game.run(input_handler, get_keys))
+# Run checker and return result
+checker.check(input_handler)
+`));
                 if (window._gameStopped) return;
                 const line = Object.entries(res)
                   .map(([k, v]) => k.toUpperCase() + (v ? " ✓" : " ✗"))
@@ -224,10 +233,8 @@ checker.check(input_handler)`),
                 );
               } catch (err) {
                 if (window._gameStopped) return;
-                status(
-                  "Ada error pada kode:\n" +
-                    String(err.message).trim().split("\n").slice(-4).join("\n"),
-                );
+                const msg = String(err.message || err);
+                status("Ada error pada kode:\n" + msg.trim());
                 isRunning = false;
                 $("code").disabled = false;
                 $("run").disabled = false;
